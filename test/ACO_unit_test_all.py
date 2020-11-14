@@ -22,6 +22,6 @@ from test_ant_colony_integration_testing import *
 from test_ant_colony_more_general import *
 from test_ant_colony_init_nodes import *
 from test_ant_colony_init import *
-	
+
 if __name__ == '__main__':
     unittest.main()
