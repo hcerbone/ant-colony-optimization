@@ -1,8 +1,8 @@
 from threading import Thread
 
-class ant_colony:
+class ant_colony_st:
 	class ant(Thread):
-		def __init__(self, init_location, possible_locations, pheromone_map, distance_callback, alpha, beta, first_pass=False):
+		def __init__(self, init_location, possible_locations, nodes, pheromone_map, distance_callback, time_callback, alpha, beta, speed, first_pass=False):
 			"""
 			initialized an ant, to traverse the map
 			init_location -> marks where in the map that the ant starts
@@ -25,14 +25,18 @@ class ant_colony:
 
 			self.init_location = init_location
 			self.possible_locations = possible_locations
+			self.nodes = nodes
 			self.route = []
 			self.distance_traveled = 0.0
 			self.location = init_location
 			self.pheromone_map = pheromone_map
 			self.distance_callback = distance_callback
+			self.time_callback = time_callback
 			self.alpha = alpha
 			self.beta = beta
+			self.speed = speed
 			self.first_pass = first_pass
+			self.time = 0
 
 			#append start location to route, before doing random walk
 			self._update_route(init_location)
@@ -53,7 +57,7 @@ class ant_colony:
 			while self.possible_locations:
 				next = self._pick_path()
 				self._traverse(self.location, next)
-
+				self.time = self.distance_traveled/self.speed
 			self.tour_complete = True
 
 		def _pick_path(self):
@@ -71,25 +75,30 @@ class ant_colony:
 			attractiveness = dict()
 			sum_total = 0.0
 			sum=0.00000000000000000000001
-			
-			
 			#for each possible location, find its attractiveness (it's (pheromone amount)*1/distance [tau*eta, from the algortihm])
 			#sum all attrativeness amounts for calculating probability of each route in the next step
 			for possible_next_location in self.possible_locations:
 				#NOTE: do all calculations as float, otherwise we get integer division at times for really hard to track down bugs
 				pheromone_amount = float(self.pheromone_map[self.location][possible_next_location])
 				distance = float(self.distance_callback(self.location, possible_next_location))
-				if(distance ==0):
+				if(distance == 0):
 					distance=0.00000000000000000000001
-
 				#tau^alpha * eta^beta
-				attractiveness[possible_next_location] = pow(pheromone_amount, self.alpha)*pow(1/distance, self.beta)
-				sum_total += attractiveness[possible_next_location]
+				#Change desirability based on sun exposure as well as the current distance weighting
+				###EXPERIMENT ONE
+				##attractiveness[possible_next_location] = pow(pheromone_amount, self.alpha)*pow(1/distance + self.time_callback(self.nodes[possible_next_location][1], self.time), self.beta)
+				##sum_total += attractiveness[possible_next_location]
+				
+				attractiveness[possible_next_location] = pow(pheromone_amount, self.alpha)*pow(1/distance * self.time_callback(self.nodes[possible_next_location][1], self.time), self.beta)
+				sum_total += attractiveness[possible_next_location]				
+
+				#attractiveness[possible_next_location] = pow(pheromone_amount, self.alpha)*pow(1/distance, self.beta)
+				#sum_total += attractiveness[possible_next_location]
 
 			#it is possible to have small values for pheromone amount / distance, such that with rounding errors this is equal to zero
 			#rare, but handle when it happens
 			if sum_total == 0.0:
-				sum=0.00000000000000000000001
+				# sum_total=0.00000000000000000000001
 				#increment all zero's, such that they are the smallest non-zero values supported by the system
 				#source: http://stackoverflow.com/a/10426033/5343977
 				def next_up(x):
@@ -114,7 +123,6 @@ class ant_colony:
 				for key in attractiveness:
 					attractiveness[key] = next_up(attractiveness[key])
 				sum_total = next_up(sum_total)
-
 			#cumulative probability behavior, inspired by: http://stackoverflow.com/a/3679747/5343977
 			#randomly choose the next path
 			import random
@@ -163,7 +171,7 @@ class ant_colony:
 				return self.distance_traveled
 			return None
 
-	def __init__(self, nodes, distance_callback, start=None, ant_count=50, alpha=.5, beta=1.2,  pheromone_evaporation_coefficient=.40, pheromone_constant=1000.0, iterations=80):
+	def __init__(self, nodes, distance_callback, time_callback, start=None, ant_count=50, alpha=.5, beta=1.2,  speed = 5, pheromone_evaporation_coefficient=.40, pheromone_constant=1000.0, iterations=80):
 		"""
 		initializes an ant colony (houses a number of worker ants that will traverse a map to find an optimal route as per ACO [Ant Colony Optimization])
 		source: https://en.wikipedia.org/wiki/Ant_colony_optimization_algorithms
@@ -173,6 +181,8 @@ class ant_colony:
 
 		distance_callback -> is assumed to take a pair of coordinates and return the distance between them
 			populated into distance_matrix on each call to get_distance()
+
+		time_callback -> is assumed to take a time t and return the sun exposure at that time
 
 		start -> if set, then is assumed to be the node where all ants start their traversal
 			if unset, then assumed to be the first key of nodes when sorted()
@@ -235,6 +245,12 @@ class ant_colony:
 
 		self.distance_callback = distance_callback
 
+		#time_callback
+		if not callable(time_callback):
+			raise TypeError("time_callback is not callable, should be method")
+
+		self.time_callback = time_callback
+
 		#start
 		if start is None:
 			self.start = 0
@@ -275,6 +291,15 @@ class ant_colony:
 			raise ValueError("beta must be >= 1")
 
 		self.beta = float(beta)
+
+		#speed
+		if (type(speed) is not int) and type(speed) is not float:
+			raise TypeError("speed must be int or float")
+
+		if speed <= 0:
+			raise ValueError("beta must be > 0")
+
+		self.speed = float(speed)
 
 		#pheromone_evaporation_coefficient
 		if (type(pheromone_evaporation_coefficient) is not int) and type(pheromone_evaporation_coefficient) is not float:
@@ -359,11 +384,12 @@ class ant_colony:
 		"""
 		#allocate new ants on the first pass
 		if self.first_pass:
-			return [self.ant(start, list(self.nodes.keys()), self.pheromone_map, self._get_distance,
-				self.alpha, self.beta, first_pass=True) for x in range(self.ant_count)]
+			return [self.ant(start, list(self.nodes.keys()), self.nodes, self.pheromone_map, self._get_distance, self.time_callback,
+				self.alpha, self.beta, self.speed, first_pass=True) for x in range(self.ant_count)]
 		#else, just reset them to use on another pass
 		for ant in self.ants:
-			ant.__init__(start, list(self.nodes.keys()), self.pheromone_map, self._get_distance, self.alpha, self.beta)
+			ant.__init__(start, list(self.nodes.keys()), self.nodes, self.pheromone_map, self._get_distance, self.time_callback, self.alpha, self.beta, self.speed)
+
 
 	def _update_pheromone_map(self):
 		"""
@@ -404,8 +430,17 @@ class ant_colony:
 			#	delta tau_xy_k = Q / L_k
 			new_pheromone_value = self.pheromone_constant/ant.get_distance_traveled()
 
-			self.ant_updated_pheromone_map[route[i]][route[i+1]] = current_pheromone_value + new_pheromone_value
-			self.ant_updated_pheromone_map[route[i+1]][route[i]] = current_pheromone_value + new_pheromone_value
+			###EXPERIMENT 2
+			###Change the pheremone amount deposited based on whether in sun or not
+			###new_pheromone_value = (self.pheromone_constant + self.time_callback(self.nodes[ant.location][1], ant.time))/ant.get_distance_traveled()
+
+			##self.ant_updated_pheromone_map[route[i]][route[i+1]] = current_pheromone_value + new_pheromone_value
+			##self.ant_updated_pheromone_map[route[i+1]][route[i]] = current_pheromone_value + new_pheromone_value
+			
+			#EXPERIMENT 2
+			#Change the pheremone amount deposited based on whether in sun or not
+			#print(self.time_callback(self.nodes[ant.location][0], ant.time))
+			#new_pheromone_value = (self.pheromone_constant * self.time_callback(self.nodes[ant.location][1], ant.time))/ant.get_distance_traveled()			
 
 	def mainloop(self):
 		"""
